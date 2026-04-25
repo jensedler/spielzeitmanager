@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#16a34a">
+  <title>{% block title %}Spielzeitmanager{% endblock %}</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    .progress-bar { transition: width 1s linear; }
+    .btn-tap { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+
+  <nav class="bg-green-700 text-white px-4 py-3 flex items-center justify-between shadow-md">
+    <a href="/games" class="text-lg font-bold tracking-tight">⚽ Spielzeit</a>
+    <div class="flex gap-4 text-sm">
+      <a href="/games" class="hover:text-green-200">Spiele</a>
+      <a href="/players" class="hover:text-green-200">Spieler</a>
+      <a href="/logout" class="hover:text-green-200">Logout</a>
+    </div>
+  </nav>
+
+  <main class="max-w-lg mx-auto px-4 py-6">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/static/sw.js');
+    }
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

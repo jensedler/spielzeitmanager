@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Spieler – Spielzeitmanager{% endblock %}
+{% block content %}
+<div x-data="playersApp()" x-init="load()" x-cloak>
+
+  <h2 class="text-xl font-bold mb-4">Spieler</h2>
+
+  <!-- Add player form -->
+  <form @submit.prevent="addPlayer()" class="flex gap-2 mb-6">
+    <input type="text" x-model="newName" placeholder="Name eingeben…"
+           class="flex-1 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"
+           maxlength="60">
+    <button type="submit"
+            class="btn-tap bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-2 rounded-lg transition-colors">
+      Hinzufügen
+    </button>
+  </form>
+
+  <!-- Player list -->
+  <ul class="space-y-2">
+    <template x-for="p in players" :key="p.id">
+      <li class="flex items-center justify-between bg-white rounded-xl px-4 py-3 shadow-sm border border-gray-100">
+        <span class="font-medium" x-text="p.name"></span>
+        <button @click="deletePlayer(p.id)"
+                class="btn-tap text-red-400 hover:text-red-600 text-xl leading-none transition-colors"
+                title="Entfernen">×</button>
+      </li>
+    </template>
+    <li x-show="players.length === 0" class="text-gray-400 text-sm text-center py-8">
+      Noch keine Spieler angelegt.
+    </li>
+  </ul>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function playersApp() {
+  return {
+    players: [],
+    newName: '',
+    async load() {
+      const r = await fetch('/api/players');
+      this.players = await r.json();
+    },
+    async addPlayer() {
+      const name = this.newName.trim();
+      if (!name) return;
+      const r = await fetch('/api/players', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name})
+      });
+      if (r.ok) {
+        this.newName = '';
+        await this.load();
+      }
+    },
+    async deletePlayer(id) {
+      if (!confirm('Spieler wirklich löschen?')) return;
+      await fetch(`/api/players/${id}`, {method: 'DELETE'});
+      await this.load();
+    }
+  }
+}
+</script>
+{% endblock %}

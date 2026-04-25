@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+{% block title %}Spiel – Spielzeitmanager{% endblock %}
+{% block content %}
+<div x-data="gameApp({{ game_id }})" x-init="init()" x-cloak>
+
+  <!-- Header -->
+  <div class="flex items-center gap-3 mb-4">
+    <a href="/games" class="text-green-700 text-lg">‹</a>
+    <div>
+      <h2 class="text-xl font-bold" x-text="game ? game.opponent : '…'"></h2>
+      <div class="text-sm text-gray-500" x-text="game ? formatDate(game.date) : ''"></div>
+    </div>
+    <div class="ml-auto">
+      <span class="text-xs px-2 py-1 rounded-full font-medium"
+            :class="statusClass(game?.status)"
+            x-text="statusLabel(game?.status)"></span>
+    </div>
+  </div>
+
+  <!-- Timer -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-4 text-center">
+    <div class="text-6xl font-mono font-bold tracking-tight mb-1"
+         :class="isRunning ? 'text-green-700' : 'text-gray-400'"
+         x-text="formatTime(displaySeconds)"></div>
+    <div class="text-sm text-gray-400 mb-1">
+      <span x-text="halfLabel(game?.status)"></span>
+      <span x-show="fairShare > 0"> · Fair Share: <span x-text="formatTime(fairShare)"></span></span>
+    </div>
+    <!-- Progress bar for overall game time -->
+    <div class="h-2 bg-gray-100 rounded-full overflow-hidden mt-3">
+      <div class="h-full bg-green-500 rounded-full progress-bar"
+           :style="`width: ${Math.min(displaySeconds / (50*60) * 100, 100)}%`"></div>
+    </div>
+    <div class="text-xs text-gray-400 mt-1">Spielzeit gesamt</div>
+  </div>
+
+  <!-- Control buttons -->
+  <div class="flex gap-2 mb-4">
+
+    <!-- Setup: Start button -->
+    <template x-if="game?.status === 'setup'">
+      <button @click="startFirstHalf()"
+              class="btn-tap flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-xl text-lg shadow transition-colors">
+        ▶ 1. Halbzeit starten
+      </button>
+    </template>
+
+    <!-- Running first half -->
+    <template x-if="game?.status === 'first_half'">
+      <button @click="pauseGame()"
+              class="btn-tap flex-1 bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-4 rounded-xl text-lg shadow transition-colors">
+        ⏸ Pause
+      </button>
+    </template>
+
+    <!-- Paused first half -->
+    <template x-if="game?.status === 'paused_first'">
+      <div class="flex gap-2 flex-1">
+        <button @click="pauseGame()"
+                class="btn-tap flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-xl shadow transition-colors">
+          ▶ Weiter
+        </button>
+        <button @click="startSecondHalf()"
+                class="btn-tap flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow transition-colors">
+          ▶▶ 2. HZ
+        </button>
+      </div>
+    </template>
+
+    <!-- Running second half -->
+    <template x-if="game?.status === 'second_half'">
+      <button @click="pauseGame()"
+              class="btn-tap flex-1 bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-4 rounded-xl text-lg shadow transition-colors">
+        ⏸ Pause
+      </button>
+    </template>
+
+    <!-- Paused second half -->
+    <template x-if="game?.status === 'paused_second'">
+      <div class="flex gap-2 flex-1">
+        <button @click="pauseGame()"
+                class="btn-tap flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-xl shadow transition-colors">
+          ▶ Weiter
+        </button>
+        <button @click="finishGame()"
+                class="btn-tap flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded-xl shadow transition-colors">
+          ■ Beenden
+        </button>
+      </div>
+    </template>
+
+    <!-- Finished -->
+    <template x-if="game?.status === 'finished'">
+      <div class="flex-1 text-center text-gray-500 font-semibold py-4">
+        Spiel beendet
+      </div>
+    </template>
+
+  </div>
+
+  <!-- Squad size hint (setup only) -->
+  <template x-if="game?.status === 'setup'">
+    <div class="text-center text-sm mb-4"
+         :class="onFieldCount === 7 ? 'text-green-700 font-semibold' : 'text-gray-400'">
+      <span x-text="onFieldCount"></span>/7 Spieler ausgewählt
+      <span x-show="onFieldCount !== 7" class="text-orange-500"> – bitte genau 7 wählen</span>
+    </div>
+  </template>
+
+  <!-- Player list -->
+  <ul class="space-y-2">
+    <template x-for="p in players" :key="p.player_id">
+      <li @click="handlePlayerTap(p)"
+          class="btn-tap flex items-center gap-3 rounded-xl px-4 py-3 shadow-sm border cursor-pointer select-none transition-all"
+          :class="playerCardClass(p)">
+
+        <!-- Status dot -->
+        <div class="w-3 h-3 rounded-full flex-shrink-0"
+             :class="p.on_field ? 'bg-green-500' : 'bg-gray-300'"></div>
+
+        <!-- Name -->
+        <div class="flex-1 min-w-0">
+          <div class="font-semibold truncate" x-text="p.name"></div>
+          <div class="text-xs text-gray-400" x-text="formatTime(p.played_seconds)"></div>
+        </div>
+
+        <!-- Progress bar -->
+        <div class="w-28 flex-shrink-0">
+          <div class="h-3 bg-gray-100 rounded-full overflow-hidden">
+            <div class="h-full rounded-full transition-all duration-1000"
+                 :class="progressColor(p)"
+                 :style="`width: ${progressPct(p)}%`"></div>
+          </div>
+          <div class="text-xs text-right mt-0.5"
+               :class="progressColor(p).replace('bg-', 'text-')"
+               x-text="`${Math.round(progressPct(p))}%`"></div>
+        </div>
+
+      </li>
+    </template>
+  </ul>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function gameApp(gameId) {
+  return {
+    game: null,
+    players: [],
+    fairShare: 0,
+    displaySeconds: 0,
+    _tickInterval: null,
+    _pollInterval: null,
+    _localStart: null,       // performance.now() when current period started (client-side)
+    _secsAtPeriodStart: 0,   // game seconds at start of current running period
+
+    get isRunning() {
+      return this.game?.status === 'first_half' || this.game?.status === 'second_half';
+    },
+    get onFieldCount() {
+      return this.players.filter(p => p.on_field).length;
+    },
+
+    async init() {
+      await this.fetchState();
+      this._pollInterval = setInterval(() => this.fetchState(), 10000);
+    },
+
+    async fetchState() {
+      try {
+        const r = await fetch(`/api/games/${gameId}/state`);
+        if (!r.ok) return;
+        const data = await r.json();
+        this._applyState(data);
+      } catch(e) { /* offline – timer keeps running locally */ }
+    },
+
+    _applyState(data) {
+      this.game = data.game;
+      this.players = data.players;
+      this.fairShare = data.fair_share_seconds;
+      this._secsAtPeriodStart = data.game.game_seconds_at_period_start;
+
+      if (this.isRunning && data.game.period_started_at) {
+        // Sync client clock to server
+        const serverNow = data.game.game_seconds;
+        this._secsAtPeriodStart = this._secsAtPeriodStart;
+        const drift = serverNow - this._secsAtPeriodStart;
+        this._localStart = performance.now() - drift * 1000;
+        this.displaySeconds = serverNow;
+        this._startTick();
+      } else {
+        this._stopTick();
+        this.displaySeconds = data.game.game_seconds;
+        this._updatePlayerDisplayTimes();
+      }
+    },
+
+    _startTick() {
+      if (this._tickInterval) return;
+      this._tickInterval = setInterval(() => {
+        const elapsed = (performance.now() - this._localStart) / 1000;
+        const secs = this._secsAtPeriodStart + elapsed;
+
+        // Auto-stop at half boundaries
+        const halfEnd = this.game?.status === 'first_half' ? 25*60 : 50*60;
+        if (secs >= halfEnd) {
+          this.displaySeconds = halfEnd;
+          this._stopTick();
+          if (this.game?.status === 'first_half') {
+            this._autoEndFirstHalf();
+          } else {
+            this._autoEndGame();
+          }
+          return;
+        }
+        this.displaySeconds = secs;
+        this._updatePlayerDisplayTimes();
+      }, 500);
+    },
+
+    _stopTick() {
+      if (this._tickInterval) {
+        clearInterval(this._tickInterval);
+        this._tickInterval = null;
+      }
+    },
+
+    _updatePlayerDisplayTimes() {
+      if (!this.isRunning) return;
+      const currentSecs = this.displaySeconds;
+      // Find players currently on field and update their live time
+      // We reconstruct from the last server snapshot + elapsed
+      this.players = this.players.map(p => {
+        if (p.on_field && this.isRunning) {
+          // server gave us played_seconds at poll time; add live delta
+          return { ...p, _live: true };
+        }
+        return p;
+      });
+    },
+
+    async _autoEndFirstHalf() {
+      try {
+        const r = await fetch(`/api/games/${gameId}/pause`, {method:'POST'});
+        if (r.ok) await this.fetchState();
+      } catch(e) {}
+    },
+
+    async _autoEndGame() {
+      try {
+        const r = await fetch(`/api/games/${gameId}/finish`, {method:'POST'});
+        if (r.ok) await this.fetchState();
+      } catch(e) {}
+    },
+
+    // ── Player tap ──────────────────────────────────────────────────────
+
+    async handlePlayerTap(p) {
+      if (this.game?.status === 'setup') {
+        await this.toggleSetup(p);
+      } else if (this.game?.status !== 'finished') {
+        await this.substitute(p);
+      }
+    },
+
+    async toggleSetup(p) {
+      const r = await fetch(`/api/games/${gameId}/toggle-player`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({player_id: p.player_id})
+      });
+      if (r.ok) {
+        const updated = await r.json();
+        this.players = this.players.map(pl =>
+          pl.player_id === p.player_id ? {...pl, on_field: updated.on_field} : pl
+        );
+      }
+    },
+
+    async substitute(p) {
+      const r = await fetch(`/api/games/${gameId}/substitute`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({player_id: p.player_id})
+      });
+      if (r.ok) {
+        // Optimistic update then refetch
+        this.players = this.players.map(pl =>
+          pl.player_id === p.player_id ? {...pl, on_field: !pl.on_field} : pl
+        );
+        await this.fetchState();
+      }
+    },
+
+    // ── Game control ────────────────────────────────────────────────────
+
+    async startFirstHalf() {
+      if (this.onFieldCount !== 7) {
+        alert('Bitte genau 7 Spieler auswählen.');
+        return;
+      }
+      const r = await fetch(`/api/games/${gameId}/start`, {method:'POST'});
+      if (r.ok) {
+        this._localStart = performance.now();
+        await this.fetchState();
+      }
+    },
+
+    async startSecondHalf() {
+      const r = await fetch(`/api/games/${gameId}/start-second-half`, {method:'POST'});
+      if (r.ok) {
+        this._localStart = performance.now();
+        await this.fetchState();
+      }
+    },
+
+    async pauseGame() {
+      const r = await fetch(`/api/games/${gameId}/pause`, {method:'POST'});
+      if (r.ok) await this.fetchState();
+    },
+
+    async finishGame() {
+      if (!confirm('Spiel wirklich beenden?')) return;
+      const r = await fetch(`/api/games/${gameId}/finish`, {method:'POST'});
+      if (r.ok) await this.fetchState();
+    },
+
+    // ── Display helpers ─────────────────────────────────────────────────
+
+    formatTime(secs) {
+      if (!secs && secs !== 0) return '00:00';
+      const s = Math.floor(secs);
+      const m = Math.floor(s / 60);
+      const ss = s % 60;
+      return `${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+    },
+    formatDate(iso) {
+      if (!iso) return '';
+      return new Date(iso).toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit', year:'numeric'});
+    },
+    halfLabel(status) {
+      return {setup:'Aufstellung', first_half:'1. Halbzeit', paused_first:'Halbzeitpause', second_half:'2. Halbzeit', paused_second:'Pause', finished:'Abpfiff'}[status] || '';
+    },
+    statusLabel(status) {
+      return {setup:'Vorbereitung', first_half:'1. HZ ▶', paused_first:'Pause', second_half:'2. HZ ▶', paused_second:'Pause', finished:'Beendet'}[status] || '';
+    },
+    statusClass(status) {
+      if (status === 'finished') return 'bg-gray-100 text-gray-500';
+      if (status === 'setup') return 'bg-blue-100 text-blue-700';
+      if (status?.includes('paused')) return 'bg-yellow-100 text-yellow-700';
+      return 'bg-green-100 text-green-700';
+    },
+
+    progressPct(p) {
+      if (!p.fair_share_seconds || p.fair_share_seconds === 0) return 0;
+      return Math.min((p.played_seconds / p.fair_share_seconds) * 100, 100);
+    },
+    progressColor(p) {
+      const pct = this.progressPct(p);
+      if (pct >= 100) return 'bg-green-500';
+      if (pct >= 60) return 'bg-blue-400';
+      return 'bg-orange-400';
+    },
+    playerCardClass(p) {
+      if (this.game?.status === 'finished') return 'bg-white border-gray-100 cursor-default';
+      if (p.on_field) return 'bg-green-50 border-green-200';
+      return 'bg-white border-gray-100';
+    },
+  }
+}
+</script>
+{% endblock %}

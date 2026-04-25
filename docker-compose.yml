@@ -1,0 +1,12 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8080:80"
+    volumes:
+      - ./storage:/storage
+    environment:
+      - APP_PASSWORD=${APP_PASSWORD:-changeme}
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-change-in-production}
+      - DATABASE_URL=sqlite:////storage/spielzeit.db
+    restart: unless-stopped
