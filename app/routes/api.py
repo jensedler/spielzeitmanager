@@ -68,7 +68,11 @@ def create_game():
     if not opponent:
         return jsonify({"error": "Gegner erforderlich"}), 400
 
-    game = Game(date=game_date, opponent=opponent)
+    field_players = int(data.get("field_players", 7))
+    if field_players < 1:
+        return jsonify({"error": "Feldspieler muss mindestens 1 sein"}), 400
+
+    game = Game(date=game_date, opponent=opponent, field_players=field_players)
     db.session.add(game)
     db.session.flush()
 
@@ -99,7 +103,8 @@ def game_state(game_id):
 
     player_times = _compute_player_times(game_id, game_secs)
     squad_size = len(roster)
-    fair_share = (50 * 60 * 7) / squad_size if squad_size > 0 else 0
+    fp = game.field_players
+    fair_share = (50 * 60 * fp) / squad_size if squad_size > 0 else 0
 
     players_data = []
     for gp in sorted(roster, key=lambda x: x.player.name):
@@ -164,10 +169,12 @@ def start_game(game_id):
     now = time.time()
 
     if game.status == "setup":
+        on_count = GamePlayer.query.filter_by(game_id=game_id, on_field=True).count()
+        if on_count != game.field_players:
+            return jsonify({"error": f"Bitte genau {game.field_players} Spieler auswählen (aktuell: {on_count})"}), 400
         game.status = "first_half"
         game.period_started_at = now
         game.game_seconds_at_period_start = 0.0
-        # Record 'on' events for all players currently on field
         for gp in GamePlayer.query.filter_by(game_id=game_id, on_field=True):
             ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on", game_seconds=0.0)
             db.session.add(ev)

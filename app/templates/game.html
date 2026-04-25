@@ -101,9 +101,11 @@
   <!-- Squad size hint (setup only) -->
   <template x-if="game?.status === 'setup'">
     <div class="text-center text-sm mb-4"
-         :class="onFieldCount === 7 ? 'text-green-700 font-semibold' : 'text-gray-400'">
-      <span x-text="onFieldCount"></span>/7 Spieler ausgewählt
-      <span x-show="onFieldCount !== 7" class="text-orange-500"> – bitte genau 7 wählen</span>
+         :class="onFieldCount === game.field_players ? 'text-green-700 font-semibold' : 'text-gray-400'">
+      <span x-text="onFieldCount"></span>/<span x-text="game.field_players"></span> Spieler ausgewählt
+      <span x-show="onFieldCount !== game.field_players" class="text-orange-500">
+        – bitte genau <span x-text="game.field_players"></span> wählen
+      </span>
     </div>
   </template>
 
@@ -298,8 +300,8 @@ function gameApp(gameId) {
     // ── Game control ────────────────────────────────────────────────────
 
     async startFirstHalf() {
-      if (this.onFieldCount !== 7) {
-        alert('Bitte genau 7 Spieler auswählen.');
+      if (this.onFieldCount !== this.game?.field_players) {
+        alert(`Bitte genau ${this.game?.field_players} Spieler auswählen.`);
         return;
       }
       const r = await fetch(`/api/games/${gameId}/start`, {method:'POST'});

@@ -26,6 +26,12 @@
                class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500">
       </div>
       <div>
+        <label class="block text-sm text-gray-600 mb-1">Feldspieler gleichzeitig</label>
+        <input type="number" x-model.number="form.field_players" min="1" max="11"
+               class="w-24 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500">
+        <span class="text-xs text-gray-400 ml-2">Standard: 7</span>
+      </div>
+      <div>
         <label class="block text-sm text-gray-600 mb-2">Spieler auswählen</label>
         <div class="grid grid-cols-2 gap-2">
           <template x-for="p in allPlayers" :key="p.id">
@@ -90,7 +96,7 @@ function gamesApp() {
     games: [],
     allPlayers: [],
     showForm: false,
-    form: { date: new Date().toISOString().slice(0,10), opponent: '', player_ids: [] },
+    form: { date: new Date().toISOString().slice(0,10), opponent: '', field_players: 7, player_ids: [] },
     async load() {
       const [gr, pr] = await Promise.all([fetch('/api/games'), fetch('/api/players')]);
       this.games = await gr.json();
@@ -109,7 +115,7 @@ function gamesApp() {
       if (r.ok) {
         const g = await r.json();
         this.showForm = false;
-        this.form = { date: new Date().toISOString().slice(0,10), opponent: '', player_ids: [] };
+        this.form = { date: new Date().toISOString().slice(0,10), opponent: '', field_players: 7, player_ids: [] };
         await this.load();
         window.location.href = `/games/${g.id}`;
       }

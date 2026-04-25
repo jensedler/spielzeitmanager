@@ -21,6 +21,7 @@ class Game(db.Model):
     opponent = db.Column(db.String(100), nullable=False)
     # setup | first_half | paused_first | second_half | paused_second | finished
     status = db.Column(db.String(20), default="setup")
+    field_players = db.Column(db.Integer, default=7)
     # wall-clock time when the current running period started
     period_started_at = db.Column(db.Float, nullable=True)
     # total game seconds already elapsed when last period started
@@ -43,6 +44,7 @@ class Game(db.Model):
             "date": self.date.isoformat(),
             "opponent": self.opponent,
             "status": self.status,
+            "field_players": self.field_players,
             "period_started_at": self.period_started_at,
             "game_seconds_at_period_start": self.game_seconds_at_period_start,
             "game_seconds": self.current_game_seconds(),
