@@ -19,13 +19,17 @@ class Game(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False)
     opponent = db.Column(db.String(100), nullable=False)
-    # setup | first_half | paused_first | second_half | paused_second | finished
+    # setup | running | paused | finished
     status = db.Column(db.String(20), default="setup")
     # number of outfield players simultaneously on the pitch (sum of formation lines)
     field_players = db.Column(db.Integer, default=7)
     # canonical formation string, e.g. "3-3-2" (goalkeeper not included)
     formation = db.Column(db.String(20), default="7")
     half_length_seconds = db.Column(db.Integer, default=1500)
+    # number of halves / periods; 2 for a normal match, more to cover a tournament
+    num_halves = db.Column(db.Integer, default=2)
+    # which half is currently running/paused (1..num_halves)
+    current_half = db.Column(db.Integer, default=1)
     # wall-clock time when the current running period started
     period_started_at = db.Column(db.Float, nullable=True)
     # total game seconds already elapsed when last period started
@@ -41,10 +45,14 @@ class Game(db.Model):
 
     def current_game_seconds(self):
         import time
-        if self.status in ("first_half", "second_half") and self.period_started_at:
+        if self.status == "running" and self.period_started_at:
             elapsed = time.time() - self.period_started_at
             return self.game_seconds_at_period_start + elapsed
         return self.game_seconds_at_period_start
+
+    @property
+    def game_length_seconds(self):
+        return self.half_length_seconds * self.num_halves
 
     def to_dict(self):
         return {
@@ -56,6 +64,9 @@ class Game(db.Model):
             "formation": self.formation,
             "formation_lines": [int(n) for n in self.formation.split("-")] if self.formation else [],
             "half_length_seconds": self.half_length_seconds,
+            "num_halves": self.num_halves,
+            "current_half": self.current_half,
+            "game_length_seconds": self.game_length_seconds,
             "half_start_seconds": self.half_start_seconds,
             "period_started_at": self.period_started_at,
             "game_seconds_at_period_start": self.game_seconds_at_period_start,

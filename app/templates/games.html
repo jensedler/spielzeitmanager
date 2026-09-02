@@ -31,10 +31,18 @@
                class="w-32 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500">
         <span class="text-xs text-gray-400 ml-2" x-text="formationPreview"></span>
       </div>
-      <div>
-        <label class="block text-sm text-gray-600 mb-1">Halbzeitlänge (Minuten)</label>
-        <input type="number" x-model.number="form.half_length_minutes" min="1" max="60"
-               class="w-24 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500">
+      <div class="flex gap-4">
+        <div>
+          <label class="block text-sm text-gray-600 mb-1">Halbzeitlänge (Minuten)</label>
+          <input type="number" x-model.number="form.half_length_minutes" min="1" max="60"
+                 class="w-24 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500">
+        </div>
+        <div>
+          <label class="block text-sm text-gray-600 mb-1">Anzahl Halbzeiten</label>
+          <input type="number" x-model.number="form.num_halves" min="1" max="20"
+                 class="w-24 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500">
+          <span class="text-xs text-gray-400 ml-2">2 = normales Spiel, mehr für ein Turnier</span>
+        </div>
       </div>
       <div>
         <label class="block text-sm text-gray-600 mb-2">Spieler auswählen</label>
@@ -101,7 +109,7 @@ function gamesApp() {
     games: [],
     allPlayers: [],
     showForm: false,
-    form: { date: new Date().toISOString().slice(0,10), opponent: '', formation: '3-3-2', half_length_minutes: 25, player_ids: [] },
+    form: { date: new Date().toISOString().slice(0,10), opponent: '', formation: '3-3-2', half_length_minutes: 25, num_halves: 2, player_ids: [] },
     get formationPreview() {
       const lines = this.parseFormation(this.form.formation);
       if (!lines) return 'z.B. 3-3-2 oder 343';
@@ -130,6 +138,10 @@ function gamesApp() {
         alert('Bitte eine gültige Formation angeben, z.B. 3-3-2.');
         return;
       }
+      if (!this.form.num_halves || this.form.num_halves < 1) {
+        alert('Bitte eine gültige Anzahl Halbzeiten angeben (mindestens 1).');
+        return;
+      }
       const r = await fetch('/api/games', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -155,11 +167,12 @@ function gamesApp() {
       return new Date(iso).toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit', year:'numeric'});
     },
     statusLabel(s) {
-      return {setup:'Vorbereitung', first_half:'1. HZ', paused_first:'Pause', second_half:'2. HZ', paused_second:'Pause', finished:'Beendet'}[s] || s;
+      return {setup:'Vorbereitung', running:'läuft', paused:'Pause', finished:'Beendet'}[s] || s;
     },
     statusClass(s) {
       if (s === 'finished') return 'bg-gray-100 text-gray-500';
       if (s === 'setup') return 'bg-blue-100 text-blue-700';
+      if (s === 'paused') return 'bg-yellow-100 text-yellow-700';
       return 'bg-green-100 text-green-700';
     }
   }

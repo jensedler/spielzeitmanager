@@ -1,4 +1,4 @@
-const CACHE = 'spielzeit-v1';
+const CACHE = 'spielzeit-v2';
 const APP_SHELL = [
   '/',
   '/games',

@@ -73,6 +73,20 @@ MIGRATIONS = [
             WHERE status IN ('second_half', 'paused_second', 'finished');
         """,
     ),
+    (
+        5,
+        "Configurable number of halves; generalise the game status machine",
+        """
+        ALTER TABLE games ADD COLUMN num_halves INTEGER DEFAULT 2;
+        ALTER TABLE games ADD COLUMN current_half INTEGER DEFAULT 1;
+        UPDATE games SET num_halves = 2 WHERE num_halves IS NULL;
+        UPDATE games SET current_half = 1 WHERE current_half IS NULL;
+        UPDATE games SET current_half = 2 WHERE status IN ('second_half', 'paused_second');
+        UPDATE games SET current_half = num_halves WHERE status = 'finished';
+        UPDATE games SET status = 'running' WHERE status IN ('first_half', 'second_half');
+        UPDATE games SET status = 'paused' WHERE status IN ('paused_first', 'paused_second');
+        """,
+    ),
 ]
 
 

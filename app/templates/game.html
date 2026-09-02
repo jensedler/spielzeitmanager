@@ -48,38 +48,30 @@
       </button>
     </template>
 
-    <!-- Running first half -->
-    <template x-if="game?.status === 'first_half'">
+    <!-- Running -->
+    <template x-if="game?.status === 'running'">
       <button @click="pauseGame()"
               class="btn-tap flex-1 bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-4 rounded-xl text-lg shadow transition-colors">
         ⏸ Pause
       </button>
     </template>
 
-    <!-- Paused first half -->
-    <template x-if="game?.status === 'paused_first'">
+    <!-- Paused, more halves to come -->
+    <template x-if="game?.status === 'paused' && !isLastHalf">
       <div class="flex gap-2 flex-1">
         <button @click="pauseGame()"
                 class="btn-tap flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-xl shadow transition-colors">
           ▶ Weiter
         </button>
-        <button @click="startSecondHalf()"
+        <button @click="nextHalf()"
                 class="btn-tap flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow transition-colors">
-          ▶▶ 2. HZ
+          ▶▶ <span x-text="(game.current_half + 1) + '. HZ'"></span>
         </button>
       </div>
     </template>
 
-    <!-- Running second half -->
-    <template x-if="game?.status === 'second_half'">
-      <button @click="pauseGame()"
-              class="btn-tap flex-1 bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-4 rounded-xl text-lg shadow transition-colors">
-        ⏸ Pause
-      </button>
-    </template>
-
-    <!-- Paused second half -->
-    <template x-if="game?.status === 'paused_second'">
+    <!-- Paused on the last half -->
+    <template x-if="game?.status === 'paused' && isLastHalf">
       <div class="flex gap-2 flex-1">
         <button @click="pauseGame()"
                 class="btn-tap flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-xl shadow transition-colors">
@@ -286,10 +278,17 @@ function gameApp(gameId) {
     _secsAtPeriodStart: 0,   // game seconds at start of current running period
 
     get isRunning() {
-      return this.game?.status === 'first_half' || this.game?.status === 'second_half';
+      return this.game?.status === 'running';
+    },
+    get numHalves() {
+      return this.game?.num_halves || 2;
+    },
+    get isLastHalf() {
+      return (this.game?.current_half || 1) >= this.numHalves;
     },
     get gameLength() {
-      return (this.game?.half_length_seconds || 1500) * 2;
+      return this.game?.game_length_seconds
+        || (this.game?.half_length_seconds || 1500) * this.numHalves;
     },
     get halfElapsedSeconds() {
       const start = this.game?.half_start_seconds || 0;
@@ -383,16 +382,16 @@ function gameApp(gameId) {
         const elapsed = (performance.now() - this._localStart) / 1000;
         const secs = this._secsAtPeriodStart + elapsed;
 
-        // Auto-stop at half boundaries
+        // Auto-stop at the current half's boundary
         const halfLength = this.game?.half_length_seconds || 1500;
-        const halfEnd = this.game?.status === 'first_half' ? halfLength : halfLength * 2;
+        const halfEnd = halfLength * (this.game?.current_half || 1);
         if (secs >= halfEnd) {
           this.displaySeconds = halfEnd;
           this._stopTick();
-          if (this.game?.status === 'first_half') {
-            this._autoEndFirstHalf();
-          } else {
+          if (this.isLastHalf) {
             this._autoEndGame();
+          } else {
+            this._autoEndHalf();
           }
           return;
         }
@@ -407,7 +406,7 @@ function gameApp(gameId) {
       }
     },
 
-    async _autoEndFirstHalf() {
+    async _autoEndHalf() {
       try {
         const r = await fetch(`/api/games/${gameId}/pause`, {method:'POST'});
         if (r.ok) await this.fetchState();
@@ -500,11 +499,14 @@ function gameApp(gameId) {
       }
     },
 
-    async startSecondHalf() {
-      const r = await fetch(`/api/games/${gameId}/start-second-half`, {method:'POST'});
+    async nextHalf() {
+      const r = await fetch(`/api/games/${gameId}/next-half`, {method:'POST'});
       if (r.ok) {
         this._localStart = performance.now();
         await this.fetchState();
+      } else {
+        const err = await r.json().catch(() => ({}));
+        alert(err.error || 'Fehler beim Start der nächsten Halbzeit.');
       }
     },
 
@@ -533,15 +535,27 @@ function gameApp(gameId) {
       return new Date(iso).toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit', year:'numeric'});
     },
     halfLabel(status) {
-      return {setup:'Aufstellung', first_half:'1. Halbzeit', paused_first:'Halbzeitpause', second_half:'2. Halbzeit', paused_second:'Pause', finished:'Abpfiff'}[status] || '';
+      status = status || this.game?.status;
+      if (!status) return '';
+      if (status === 'setup') return 'Aufstellung';
+      if (status === 'finished') return 'Abpfiff';
+      const h = this.game?.current_half || 1;
+      if (status === 'paused') {
+        return this.isLastHalf ? 'Pause' : `Pause nach ${h}. Halbzeit`;
+      }
+      return `${h}. Halbzeit`;
     },
     statusLabel(status) {
-      return {setup:'Vorbereitung', first_half:'1. HZ ▶', paused_first:'Pause', second_half:'2. HZ ▶', paused_second:'Pause', finished:'Beendet'}[status] || '';
+      status = status || this.game?.status;
+      if (status === 'setup') return 'Vorbereitung';
+      if (status === 'finished') return 'Beendet';
+      if (status === 'paused') return 'Pause';
+      return `${this.game?.current_half || 1}. HZ ▶`;
     },
     statusClass(status) {
       if (status === 'finished') return 'bg-gray-100 text-gray-500';
       if (status === 'setup') return 'bg-blue-100 text-blue-700';
-      if (status?.includes('paused')) return 'bg-yellow-100 text-yellow-700';
+      if (status === 'paused') return 'bg-yellow-100 text-yellow-700';
       return 'bg-green-100 text-green-700';
     },
 

@@ -83,12 +83,21 @@ def create_game():
         return jsonify({"error": "Halbzeitlänge muss größer als 0 sein"}), 400
     half_length_seconds = int(half_length_minutes * 60)
 
+    try:
+        num_halves = int(data.get("num_halves", 2))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Ungültige Anzahl Halbzeiten"}), 400
+    if num_halves < 1 or num_halves > 20:
+        return jsonify({"error": "Anzahl Halbzeiten muss zwischen 1 und 20 liegen"}), 400
+
     game = Game(
         date=game_date,
         opponent=opponent,
         field_players=field_players,
         formation=formation,
         half_length_seconds=half_length_seconds,
+        num_halves=num_halves,
+        current_half=1,
     )
     db.session.add(game)
     db.session.flush()
@@ -147,7 +156,7 @@ def game_state(game_id):
     player_times, gk_times = _compute_player_times(game_id, game_secs)
     squad_size = len(roster)
     fp = game.field_players
-    game_length = game.half_length_seconds * 2
+    game_length = game.game_length_seconds
     fair_share = (game_length * fp) / squad_size if squad_size > 0 else 0
 
     players_data = []
@@ -227,7 +236,7 @@ def assign_slot(game_id):
         game_id=game_id, slot_line=slot_line, slot_index=slot_index
     ).first()
 
-    running_or_paused = game.status in ("first_half", "second_half", "paused_first", "paused_second")
+    running_or_paused = game.status in ("running", "paused")
     if running_or_paused:
         game_secs = game.current_game_seconds()
         if outgoing:
@@ -278,7 +287,8 @@ def start_game(game_id):
         required = game.field_players + 1
         if on_count != required:
             return jsonify({"error": f"Bitte genau {required} Spieler (inkl. Torhüter) aufstellen (aktuell: {on_count})"}), 400
-        game.status = "first_half"
+        game.status = "running"
+        game.current_half = 1
         game.period_started_at = now
         game.game_seconds_at_period_start = 0.0
         game.half_start_seconds = 0.0
@@ -287,24 +297,15 @@ def start_game(game_id):
                               game_seconds=0.0, is_gk=(gp.slot_line == 0))
             db.session.add(ev)
 
-    elif game.status in ("paused_first", "paused_second"):
-        half = "first_half" if game.status == "paused_first" else "second_half"
-        game.status = half
+    elif game.status == "paused":
+        # Resume the current half
+        game.status = "running"
         game.period_started_at = now
-        # Record 'on' for players currently on field
         current_secs = game.game_seconds_at_period_start
         for gp in GamePlayer.query.filter_by(game_id=game_id, on_field=True):
             ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on",
                               game_seconds=current_secs, is_gk=(gp.slot_line == 0))
             db.session.add(ev)
-
-    elif game.status == "first_half":
-        # Manual transition to second half (shouldn't normally happen, auto-stop handles this)
-        elapsed = now - game.period_started_at
-        game.game_seconds_at_period_start = min(game.game_seconds_at_period_start + elapsed, game.half_length_seconds)
-        game.status = "paused_first"
-        game.period_started_at = None
-        _record_off_for_on_field(game_id, game.game_seconds_at_period_start)
 
     else:
         return jsonify({"error": f"Ungültiger Status: {game.status}"}), 400
@@ -313,15 +314,19 @@ def start_game(game_id):
     return jsonify(game.to_dict())
 
 
-@api_bp.route("/games/<int:game_id>/start-second-half", methods=["POST"])
+@api_bp.route("/games/<int:game_id>/next-half", methods=["POST"])
 @api_login_required
-def start_second_half(game_id):
+def next_half(game_id):
+    """Advance from a paused half to the start of the next one."""
     game = Game.query.get_or_404(game_id)
-    if game.status not in ("paused_first",):
-        return jsonify({"error": "Erste Halbzeit muss beendet sein"}), 400
+    if game.status != "paused":
+        return jsonify({"error": "Aktuelle Halbzeit muss pausiert sein"}), 400
+    if game.current_half >= game.num_halves:
+        return jsonify({"error": "Letzte Halbzeit ist bereits erreicht"}), 400
 
     now = time.time()
-    game.status = "second_half"
+    game.current_half += 1
+    game.status = "running"
     game.period_started_at = now
     current_secs = game.game_seconds_at_period_start
     game.half_start_seconds = current_secs
@@ -341,25 +346,20 @@ def pause_game(game_id):
     game = Game.query.get_or_404(game_id)
     now = time.time()
 
-    if game.status in ("first_half", "second_half"):
+    if game.status == "running":
         elapsed = now - game.period_started_at
-        new_secs = game.game_seconds_at_period_start + elapsed
-        # cap at half boundaries
-        if game.status == "first_half":
-            new_secs = min(new_secs, game.half_length_seconds)
-            game.status = "paused_first"
-        else:
-            new_secs = min(new_secs, game.half_length_seconds * 2)
-            game.status = "paused_second"
+        # cap at the current half's boundary
+        half_end = game.half_length_seconds * game.current_half
+        new_secs = min(game.game_seconds_at_period_start + elapsed, half_end)
+        game.status = "paused"
         game.game_seconds_at_period_start = new_secs
         game.period_started_at = None
         _record_off_for_on_field(game_id, new_secs)
 
-    elif game.status in ("paused_first", "paused_second"):
+    elif game.status == "paused":
         # Resume
         current_secs = game.game_seconds_at_period_start
-        half = "first_half" if game.status == "paused_first" else "second_half"
-        game.status = half
+        game.status = "running"
         game.period_started_at = now
         for gp in GamePlayer.query.filter_by(game_id=game_id, on_field=True):
             ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on",
@@ -379,12 +379,12 @@ def finish_game(game_id):
     game = Game.query.get_or_404(game_id)
     now = time.time()
 
-    if game.status in ("second_half",):
+    if game.status == "running":
         elapsed = now - game.period_started_at
-        new_secs = min(game.game_seconds_at_period_start + elapsed, game.half_length_seconds * 2)
+        new_secs = min(game.game_seconds_at_period_start + elapsed, game.game_length_seconds)
         game.game_seconds_at_period_start = new_secs
         _record_off_for_on_field(game_id, new_secs)
-    elif game.status == "paused_second":
+    elif game.status == "paused":
         _record_off_for_on_field(game_id, game.game_seconds_at_period_start)
 
     game.status = "finished"
