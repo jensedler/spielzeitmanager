@@ -32,11 +32,14 @@ GitHub Actions baut das Docker-Image und pusht nach `ghcr.io/jensedler/spielzeit
 
 ## Spiellogik
 
-- Spiellänge: 2 × 25 Minuten
-- Maximal 7 Spieler gleichzeitig auf dem Platz
-- Fair Share = (50 min × 7) / Anzahl Spieler im Kader
+- Spiellänge: 2 Halbzeiten, Länge pro Halbzeit wird bei Spielanlage frei festgelegt (`half_length_seconds`, Default 25 Min)
+- Formation wird bei Spielanlage als String eingegeben (z.B. `3-3-2` oder `343`, siehe `app/formation.py`) und bestimmt Anzahl und Anordnung der Feldspieler; sie ist danach fix
+- Zusätzlich zur Formation ist immer genau 1 Torhüter zu besetzen (nicht Teil der Formationsangabe)
+- Aufstellung erfolgt slot-basiert: jeder `GamePlayer` bekommt eine `slot_line` (0 = Torhüter, 1..N = Formationslinie) + `slot_index`; Ein-/Auswechseln = Antippen eines Slots im Spielfeld, Auswahl eines Bankspielers (`POST /games/<id>/assign-slot`)
+- Fair Share = (Halbzeitlänge × 2 × Anzahl Feldspieler laut Formation) / Anzahl Spieler im Kader
+- Torhüterzeit wird separat erfasst (`PlayerEvent.is_gk`) und angezeigt, fließt aber nicht in die Fair-Share-Berechnung ein
 - Timer läuft client-seitig (Alpine.js), Events werden ans Backend gesendet
-- Auto-Stop bei 25:00 (Halbzeit) und 50:00 (Spielende)
+- Auto-Stop bei Ende der jeweiligen Halbzeitlänge und bei doppelter Halbzeitlänge (Spielende)
 
 ## Umgebungsvariablen
 
