@@ -135,7 +135,13 @@
 
   <!-- Bench -->
   <div class="mb-4">
-    <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Bank</div>
+    <div class="flex items-center justify-between mb-2">
+      <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Bank</div>
+      <button x-show="game?.status !== 'finished'" @click="openRosterPicker()"
+              class="btn-tap text-xs text-green-700 font-semibold hover:text-green-800">
+        + Spieler zum Kader hinzufügen
+      </button>
+    </div>
     <div class="flex flex-wrap gap-2">
       <template x-for="p in benchPlayers" :key="p.player_id">
         <div class="px-3 py-2 rounded-lg bg-white border border-gray-100 shadow-sm text-sm">
@@ -213,6 +219,36 @@
     </div>
   </div>
 
+  <!-- Roster picker: add existing players to this game's squad -->
+  <div x-show="rosterOpen" x-transition
+       class="fixed inset-0 bg-black/50 z-40 flex items-end sm:items-center justify-center"
+       @click.self="closeRosterPicker()">
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-sm max-h-[70vh] overflow-y-auto p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold">Spieler zum Kader hinzufügen</h3>
+        <button @click="closeRosterPicker()" class="text-gray-400 text-xl leading-none px-2">&times;</button>
+      </div>
+      <ul class="space-y-2 mb-3">
+        <template x-for="p in availablePlayers" :key="p.id">
+          <li class="flex items-center gap-2 rounded-lg px-3 py-2 bg-gray-50">
+            <input type="checkbox" :value="p.id" x-model.number="rosterSelection"
+                   class="rounded text-green-600 focus:ring-green-500">
+            <span class="font-medium" x-text="p.name"></span>
+          </li>
+        </template>
+        <li x-show="availablePlayers.length === 0" class="text-gray-400 text-sm text-center py-4">
+          Alle angelegten Spieler sind bereits im Kader.
+          <br><a href="/players" class="text-green-700 underline">Neue Spieler anlegen</a>
+        </li>
+      </ul>
+      <button x-show="availablePlayers.length > 0" @click="submitRoster()"
+              :disabled="rosterSelection.length === 0"
+              class="btn-tap w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-200 disabled:text-gray-400 text-white font-semibold py-2 rounded-lg transition-colors">
+        Hinzufügen
+      </button>
+    </div>
+  </div>
+
 </div>
 
 <style>
@@ -233,11 +269,14 @@ function gameApp(gameId) {
   return {
     game: null,
     players: [],
+    allPlayers: [],
     fairShare: 0,
     displaySeconds: 0,
     pickerOpen: false,
     pickerLine: null,
     pickerIndex: null,
+    rosterOpen: false,
+    rosterSelection: [],
     _tickInterval: null,
     _pollInterval: null,
     _localStart: null,       // performance.now() when current period started (client-side)
@@ -280,6 +319,10 @@ function gameApp(gameId) {
       if (this.pickerLine === null) return null;
       return this._findSlot(this.pickerLine, this.pickerIndex);
     },
+    get availablePlayers() {
+      const squadIds = new Set(this.players.map(p => p.player_id));
+      return this.allPlayers.filter(p => !squadIds.has(p.id)).sort((a, b) => a.name.localeCompare(b.name));
+    },
 
     _findSlot(line, index) {
       return this.players.find(p => p.slot_line === line && p.slot_index === index) || null;
@@ -287,7 +330,15 @@ function gameApp(gameId) {
 
     async init() {
       await this.fetchState();
+      await this.fetchAllPlayers();
       this._pollInterval = setInterval(() => this.fetchState(), 10000);
+    },
+
+    async fetchAllPlayers() {
+      try {
+        const r = await fetch('/api/players');
+        if (r.ok) this.allPlayers = await r.json();
+      } catch(e) {}
     },
 
     async fetchState() {
@@ -399,6 +450,32 @@ function gameApp(gameId) {
       if (r.ok) {
         this.pickerOpen = false;
         await this.fetchState();
+      }
+    },
+
+    // ── Roster (add players to squad) ───────────────────────────────────
+
+    async openRosterPicker() {
+      await this.fetchAllPlayers();
+      this.rosterSelection = [];
+      this.rosterOpen = true;
+    },
+    closeRosterPicker() {
+      this.rosterOpen = false;
+    },
+    async submitRoster() {
+      if (this.rosterSelection.length === 0) return;
+      const r = await fetch(`/api/games/${gameId}/roster`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ player_ids: this.rosterSelection })
+      });
+      if (r.ok) {
+        this.rosterOpen = false;
+        await this.fetchState();
+      } else {
+        const err = await r.json().catch(() => ({}));
+        alert(err.error || 'Fehler beim Hinzufügen.');
       }
     },
 

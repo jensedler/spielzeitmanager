@@ -111,6 +111,32 @@ def delete_game(game_id):
     return jsonify({"ok": True})
 
 
+@api_bp.route("/games/<int:game_id>/roster", methods=["POST"])
+@api_login_required
+def add_to_roster(game_id):
+    """Add one or more existing players to a game's squad (as bench players).
+    Allowed any time before the game is finished, so a squad forgotten or
+    missing at game creation can still be filled in later."""
+    game = Game.query.get_or_404(game_id)
+    if game.status == "finished":
+        return jsonify({"error": "Spiel ist bereits beendet"}), 400
+
+    data = request.get_json()
+    player_ids = data.get("player_ids", [])
+    existing = {gp.player_id for gp in GamePlayer.query.filter_by(game_id=game_id).all()}
+
+    added = 0
+    for pid in player_ids:
+        if pid in existing or not Player.query.get(pid):
+            continue
+        db.session.add(GamePlayer(game_id=game_id, player_id=pid, on_field=False))
+        existing.add(pid)
+        added += 1
+
+    db.session.commit()
+    return jsonify({"ok": True, "added": added})
+
+
 @api_bp.route("/games/<int:game_id>/state", methods=["GET"])
 @api_login_required
 def game_state(game_id):
