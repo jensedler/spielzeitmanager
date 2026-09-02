@@ -30,6 +30,10 @@ class Game(db.Model):
     period_started_at = db.Column(db.Float, nullable=True)
     # total game seconds already elapsed when last period started
     game_seconds_at_period_start = db.Column(db.Float, default=0.0)
+    # total game seconds elapsed at the moment the current half began (0 for
+    # the first half; set to whatever the total was when the second half
+    # was started) — lets the UI show a per-half clock that starts at 0:00
+    half_start_seconds = db.Column(db.Float, default=0.0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     players = db.relationship("GamePlayer", backref="game", lazy=True, cascade="all, delete-orphan")
@@ -52,6 +56,7 @@ class Game(db.Model):
             "formation": self.formation,
             "formation_lines": [int(n) for n in self.formation.split("-")] if self.formation else [],
             "half_length_seconds": self.half_length_seconds,
+            "half_start_seconds": self.half_start_seconds,
             "period_started_at": self.period_started_at,
             "game_seconds_at_period_start": self.game_seconds_at_period_start,
             "game_seconds": self.current_game_seconds(),

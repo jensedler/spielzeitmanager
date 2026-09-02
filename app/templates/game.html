@@ -21,17 +21,20 @@
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-4 text-center">
     <div class="text-6xl font-mono font-bold tracking-tight mb-1"
          :class="isRunning ? 'text-green-700' : 'text-gray-400'"
-         x-text="formatTime(displaySeconds)"></div>
+         x-text="formatTime(halfElapsedSeconds)"></div>
     <div class="text-sm text-gray-400 mb-1">
       <span x-text="halfLabel(game?.status)"></span>
       <span x-show="fairShare > 0"> · Fair Share: <span x-text="formatTime(fairShare)"></span></span>
     </div>
-    <!-- Progress bar for overall game time -->
+    <!-- Progress bar for the current half -->
     <div class="h-2 bg-gray-100 rounded-full overflow-hidden mt-3">
       <div class="h-full bg-green-500 rounded-full progress-bar"
-           :style="`width: ${Math.min(displaySeconds / gameLength * 100, 100)}%`"></div>
+           :style="`width: ${Math.min(halfElapsedSeconds / (game?.half_length_seconds || 1) * 100, 100)}%`"></div>
     </div>
-    <div class="text-xs text-gray-400 mt-1">Spielzeit gesamt</div>
+    <div class="text-xs text-gray-400 mt-1 mb-2">Halbzeit</div>
+    <!-- Total game time, smaller -->
+    <div class="text-lg font-mono font-semibold text-gray-400" x-text="formatTime(displaySeconds)"></div>
+    <div class="text-xs text-gray-400">Spielzeit gesamt</div>
   </div>
 
   <!-- Control buttons -->
@@ -287,6 +290,10 @@ function gameApp(gameId) {
     },
     get gameLength() {
       return (this.game?.half_length_seconds || 1500) * 2;
+    },
+    get halfElapsedSeconds() {
+      const start = this.game?.half_start_seconds || 0;
+      return Math.max(0, this.displaySeconds - start);
     },
     get assignedCount() {
       return this.players.filter(p => p.slot_line !== null).length;

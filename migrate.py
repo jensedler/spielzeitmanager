@@ -63,6 +63,16 @@ MIGRATIONS = [
         UPDATE games SET formation = CAST(field_players AS TEXT) WHERE formation IS NULL;
         """,
     ),
+    (
+        4,
+        "Add half_start_seconds to games for a per-half timer",
+        """
+        ALTER TABLE games ADD COLUMN half_start_seconds REAL DEFAULT 0.0;
+        UPDATE games SET half_start_seconds = 0.0 WHERE half_start_seconds IS NULL;
+        UPDATE games SET half_start_seconds = half_length_seconds
+            WHERE status IN ('second_half', 'paused_second', 'finished');
+        """,
+    ),
 ]
 
 

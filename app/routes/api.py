@@ -281,6 +281,7 @@ def start_game(game_id):
         game.status = "first_half"
         game.period_started_at = now
         game.game_seconds_at_period_start = 0.0
+        game.half_start_seconds = 0.0
         for gp in GamePlayer.query.filter_by(game_id=game_id, on_field=True):
             ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on",
                               game_seconds=0.0, is_gk=(gp.slot_line == 0))
@@ -323,6 +324,7 @@ def start_second_half(game_id):
     game.status = "second_half"
     game.period_started_at = now
     current_secs = game.game_seconds_at_period_start
+    game.half_start_seconds = current_secs
 
     for gp in GamePlayer.query.filter_by(game_id=game_id, on_field=True):
         ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on",
