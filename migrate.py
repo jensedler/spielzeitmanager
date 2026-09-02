@@ -50,6 +50,19 @@ MIGRATIONS = [
         "Add field_players to games",
         "ALTER TABLE games ADD COLUMN field_players INTEGER DEFAULT 7;",
     ),
+    (
+        3,
+        "Add formation, configurable half length, and goalkeeper slot tracking",
+        """
+        ALTER TABLE games ADD COLUMN formation TEXT;
+        ALTER TABLE games ADD COLUMN half_length_seconds INTEGER DEFAULT 1500;
+        ALTER TABLE game_players ADD COLUMN slot_line INTEGER;
+        ALTER TABLE game_players ADD COLUMN slot_index INTEGER;
+        ALTER TABLE player_events ADD COLUMN is_gk INTEGER DEFAULT 0;
+        UPDATE games SET half_length_seconds = 1500 WHERE half_length_seconds IS NULL;
+        UPDATE games SET formation = CAST(field_players AS TEXT) WHERE formation IS NULL;
+        """,
+    ),
 ]
 
 

@@ -21,7 +21,11 @@ class Game(db.Model):
     opponent = db.Column(db.String(100), nullable=False)
     # setup | first_half | paused_first | second_half | paused_second | finished
     status = db.Column(db.String(20), default="setup")
+    # number of outfield players simultaneously on the pitch (sum of formation lines)
     field_players = db.Column(db.Integer, default=7)
+    # canonical formation string, e.g. "3-3-2" (goalkeeper not included)
+    formation = db.Column(db.String(20), default="7")
+    half_length_seconds = db.Column(db.Integer, default=1500)
     # wall-clock time when the current running period started
     period_started_at = db.Column(db.Float, nullable=True)
     # total game seconds already elapsed when last period started
@@ -45,6 +49,9 @@ class Game(db.Model):
             "opponent": self.opponent,
             "status": self.status,
             "field_players": self.field_players,
+            "formation": self.formation,
+            "formation_lines": [int(n) for n in self.formation.split("-")] if self.formation else [],
+            "half_length_seconds": self.half_length_seconds,
             "period_started_at": self.period_started_at,
             "game_seconds_at_period_start": self.game_seconds_at_period_start,
             "game_seconds": self.current_game_seconds(),
@@ -58,6 +65,10 @@ class GamePlayer(db.Model):
     player_id = db.Column(db.Integer, db.ForeignKey("players.id"), nullable=False)
     # True = currently on the field, False = on bench
     on_field = db.Column(db.Boolean, default=False)
+    # 0 = goalkeeper, 1..N = formation line (1 = defense, ascending toward attack), NULL = bench
+    slot_line = db.Column(db.Integer, nullable=True)
+    # position within the line, 0-based
+    slot_index = db.Column(db.Integer, nullable=True)
 
     player = db.relationship("Player")
 
@@ -67,6 +78,8 @@ class GamePlayer(db.Model):
             "player_id": self.player_id,
             "name": self.player.name,
             "on_field": self.on_field,
+            "slot_line": self.slot_line,
+            "slot_index": self.slot_index,
         }
 
 
@@ -79,6 +92,8 @@ class PlayerEvent(db.Model):
     # 'on' or 'off'
     event_type = db.Column(db.String(3), nullable=False)
     game_seconds = db.Column(db.Float, nullable=False)
+    # True if the player was in the goalkeeper slot for this event
+    is_gk = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     player = db.relationship("Player")

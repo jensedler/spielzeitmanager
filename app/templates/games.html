@@ -26,10 +26,15 @@
                class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500">
       </div>
       <div>
-        <label class="block text-sm text-gray-600 mb-1">Feldspieler gleichzeitig</label>
-        <input type="number" x-model.number="form.field_players" min="1" max="11"
+        <label class="block text-sm text-gray-600 mb-1">Formation</label>
+        <input type="text" x-model="form.formation" placeholder="z.B. 3-3-2" maxlength="20"
+               class="w-32 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500">
+        <span class="text-xs text-gray-400 ml-2" x-text="formationPreview"></span>
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Halbzeitlänge (Minuten)</label>
+        <input type="number" x-model.number="form.half_length_minutes" min="1" max="60"
                class="w-24 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500">
-        <span class="text-xs text-gray-400 ml-2">Standard: 7</span>
       </div>
       <div>
         <label class="block text-sm text-gray-600 mb-2">Spieler auswählen</label>
@@ -96,7 +101,21 @@ function gamesApp() {
     games: [],
     allPlayers: [],
     showForm: false,
-    form: { date: new Date().toISOString().slice(0,10), opponent: '', field_players: 7, player_ids: [] },
+    form: { date: new Date().toISOString().slice(0,10), opponent: '', formation: '3-3-2', half_length_minutes: 25, player_ids: [] },
+    get formationPreview() {
+      const lines = this.parseFormation(this.form.formation);
+      if (!lines) return 'z.B. 3-3-2 oder 343';
+      const total = lines.reduce((a,b) => a+b, 0);
+      return `→ ${total} Feldspieler + 1 Torhüter`;
+    },
+    parseFormation(raw) {
+      if (!raw || !raw.trim()) return null;
+      const trimmed = raw.trim();
+      const parts = /[-,\s]/.test(trimmed) ? trimmed.split(/[-,\s]+/).filter(Boolean) : trimmed.split('');
+      const lines = parts.map(p => parseInt(p, 10));
+      if (lines.some(n => isNaN(n) || n < 1)) return null;
+      return lines;
+    },
     async load() {
       const [gr, pr] = await Promise.all([fetch('/api/games'), fetch('/api/players')]);
       this.games = await gr.json();
@@ -107,6 +126,10 @@ function gamesApp() {
         alert('Bitte Datum und Gegner angeben.');
         return;
       }
+      if (!this.parseFormation(this.form.formation)) {
+        alert('Bitte eine gültige Formation angeben, z.B. 3-3-2.');
+        return;
+      }
       const r = await fetch('/api/games', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -115,9 +138,12 @@ function gamesApp() {
       if (r.ok) {
         const g = await r.json();
         this.showForm = false;
-        this.form = { date: new Date().toISOString().slice(0,10), opponent: '', field_players: 7, player_ids: [] };
+        this.form = { date: new Date().toISOString().slice(0,10), opponent: '', formation: '3-3-2', half_length_minutes: 25, player_ids: [] };
         await this.load();
         window.location.href = `/games/${g.id}`;
+      } else {
+        const err = await r.json().catch(() => ({}));
+        alert(err.error || 'Fehler beim Erstellen des Spiels.');
       }
     },
     async deleteGame(id) {

@@ -1,6 +1,7 @@
 import time
 from flask import Blueprint, jsonify, request, session, redirect, url_for
 from ..models import db, Player, Game, GamePlayer, PlayerEvent
+from ..formation import parse_formation, FormationError
 
 api_bp = Blueprint("api", __name__)
 
@@ -68,11 +69,27 @@ def create_game():
     if not opponent:
         return jsonify({"error": "Gegner erforderlich"}), 400
 
-    field_players = int(data.get("field_players", 7))
-    if field_players < 1:
-        return jsonify({"error": "Feldspieler muss mindestens 1 sein"}), 400
+    try:
+        lines, formation = parse_formation(data.get("formation", ""))
+    except FormationError as e:
+        return jsonify({"error": str(e)}), 400
+    field_players = sum(lines)
 
-    game = Game(date=game_date, opponent=opponent, field_players=field_players)
+    try:
+        half_length_minutes = float(data.get("half_length_minutes", 25))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Ungültige Halbzeitlänge"}), 400
+    if half_length_minutes <= 0:
+        return jsonify({"error": "Halbzeitlänge muss größer als 0 sein"}), 400
+    half_length_seconds = int(half_length_minutes * 60)
+
+    game = Game(
+        date=game_date,
+        opponent=opponent,
+        field_players=field_players,
+        formation=formation,
+        half_length_seconds=half_length_seconds,
+    )
     db.session.add(game)
     db.session.flush()
 
@@ -101,17 +118,20 @@ def game_state(game_id):
     roster = GamePlayer.query.filter_by(game_id=game_id).all()
     game_secs = game.current_game_seconds()
 
-    player_times = _compute_player_times(game_id, game_secs)
+    player_times, gk_times = _compute_player_times(game_id, game_secs)
     squad_size = len(roster)
     fp = game.field_players
-    fair_share = (50 * 60 * fp) / squad_size if squad_size > 0 else 0
+    game_length = game.half_length_seconds * 2
+    fair_share = (game_length * fp) / squad_size if squad_size > 0 else 0
 
     players_data = []
     for gp in sorted(roster, key=lambda x: x.player.name):
         pt = player_times.get(gp.player_id, 0.0)
+        gt = gk_times.get(gp.player_id, 0.0)
         players_data.append({
             **gp.to_dict(),
             "played_seconds": pt,
+            "gk_seconds": gt,
             "fair_share_seconds": fair_share,
         })
 
@@ -124,42 +144,101 @@ def game_state(game_id):
 
 
 def _compute_player_times(game_id, current_game_seconds):
-    """Returns dict of player_id -> total played seconds."""
+    """Returns (field_times, gk_times): dicts of player_id -> total seconds played,
+    split by whether the player was in the goalkeeper slot for that stretch."""
     events = (
         PlayerEvent.query
         .filter_by(game_id=game_id)
         .order_by(PlayerEvent.game_seconds)
         .all()
     )
-    times = {}
+    field_times = {}
+    gk_times = {}
     on_since = {}
     for ev in events:
         pid = ev.player_id
         if ev.event_type == "on":
-            on_since[pid] = ev.game_seconds
+            on_since[pid] = (ev.game_seconds, ev.is_gk)
         elif ev.event_type == "off":
             if pid in on_since:
-                times[pid] = times.get(pid, 0.0) + (ev.game_seconds - on_since.pop(pid))
+                start, is_gk = on_since.pop(pid)
+                duration = ev.game_seconds - start
+                bucket = gk_times if is_gk else field_times
+                bucket[pid] = bucket.get(pid, 0.0) + duration
     # still on field
-    for pid, start in on_since.items():
-        times[pid] = times.get(pid, 0.0) + (current_game_seconds - start)
-    return times
+    for pid, (start, is_gk) in on_since.items():
+        duration = current_game_seconds - start
+        bucket = gk_times if is_gk else field_times
+        bucket[pid] = bucket.get(pid, 0.0) + duration
+    return field_times, gk_times
 
 
 # ── Game actions ───────────────────────────────────────────────────────────
 
-@api_bp.route("/games/<int:game_id>/toggle-player", methods=["POST"])
+@api_bp.route("/games/<int:game_id>/assign-slot", methods=["POST"])
 @api_login_required
-def toggle_player(game_id):
-    """Pre-game: toggle on_field flag."""
+def assign_slot(game_id):
+    """Assign a bench player to a pitch slot (GK=0, or formation line 1..N).
+    If the slot is already occupied, the previous occupant goes back to the bench.
+    Works both pre-game (setup, no events) and during/paused a running game
+    (records substitution events)."""
+    game = Game.query.get_or_404(game_id)
+    if game.status == "finished":
+        return jsonify({"error": "Spiel ist bereits beendet"}), 400
+
+    data = request.get_json()
+    try:
+        slot_line = int(data["slot_line"])
+        slot_index = int(data["slot_index"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "Ungültiger Slot"}), 400
+
+    incoming = GamePlayer.query.filter_by(game_id=game_id, player_id=data.get("player_id")).first_or_404()
+    if incoming.slot_line is not None:
+        return jsonify({"error": "Spieler ist bereits im Feld"}), 400
+
+    outgoing = GamePlayer.query.filter_by(
+        game_id=game_id, slot_line=slot_line, slot_index=slot_index
+    ).first()
+
+    running_or_paused = game.status in ("first_half", "second_half", "paused_first", "paused_second")
+    if running_or_paused:
+        game_secs = game.current_game_seconds()
+        if outgoing:
+            ev = PlayerEvent(game_id=game_id, player_id=outgoing.player_id, event_type="off",
+                              game_seconds=game_secs, is_gk=(outgoing.slot_line == 0))
+            db.session.add(ev)
+        ev = PlayerEvent(game_id=game_id, player_id=incoming.player_id, event_type="on",
+                          game_seconds=game_secs, is_gk=(slot_line == 0))
+        db.session.add(ev)
+
+    if outgoing:
+        outgoing.slot_line = None
+        outgoing.slot_index = None
+        outgoing.on_field = False
+
+    incoming.slot_line = slot_line
+    incoming.slot_index = slot_index
+    incoming.on_field = True
+
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@api_bp.route("/games/<int:game_id>/unassign-slot", methods=["POST"])
+@api_login_required
+def unassign_slot(game_id):
+    """Setup only: send a slotted player back to the bench without a replacement."""
     game = Game.query.get_or_404(game_id)
     if game.status != "setup":
         return jsonify({"error": "Nur vor Spielstart möglich"}), 400
     data = request.get_json()
-    gp = GamePlayer.query.filter_by(game_id=game_id, player_id=data["player_id"]).first_or_404()
-    gp.on_field = not gp.on_field
+    gp = GamePlayer.query.filter_by(game_id=game_id, player_id=data.get("player_id")).first_or_404()
+    gp.slot_line = None
+    gp.slot_index = None
+    gp.on_field = False
     db.session.commit()
-    return jsonify(gp.to_dict())
+    return jsonify({"ok": True})
 
 
 @api_bp.route("/games/<int:game_id>/start", methods=["POST"])
@@ -170,13 +249,15 @@ def start_game(game_id):
 
     if game.status == "setup":
         on_count = GamePlayer.query.filter_by(game_id=game_id, on_field=True).count()
-        if on_count != game.field_players:
-            return jsonify({"error": f"Bitte genau {game.field_players} Spieler auswählen (aktuell: {on_count})"}), 400
+        required = game.field_players + 1
+        if on_count != required:
+            return jsonify({"error": f"Bitte genau {required} Spieler (inkl. Torhüter) aufstellen (aktuell: {on_count})"}), 400
         game.status = "first_half"
         game.period_started_at = now
         game.game_seconds_at_period_start = 0.0
         for gp in GamePlayer.query.filter_by(game_id=game_id, on_field=True):
-            ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on", game_seconds=0.0)
+            ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on",
+                              game_seconds=0.0, is_gk=(gp.slot_line == 0))
             db.session.add(ev)
 
     elif game.status in ("paused_first", "paused_second"):
@@ -186,13 +267,14 @@ def start_game(game_id):
         # Record 'on' for players currently on field
         current_secs = game.game_seconds_at_period_start
         for gp in GamePlayer.query.filter_by(game_id=game_id, on_field=True):
-            ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on", game_seconds=current_secs)
+            ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on",
+                              game_seconds=current_secs, is_gk=(gp.slot_line == 0))
             db.session.add(ev)
 
     elif game.status == "first_half":
         # Manual transition to second half (shouldn't normally happen, auto-stop handles this)
         elapsed = now - game.period_started_at
-        game.game_seconds_at_period_start = min(game.game_seconds_at_period_start + elapsed, 25 * 60)
+        game.game_seconds_at_period_start = min(game.game_seconds_at_period_start + elapsed, game.half_length_seconds)
         game.status = "paused_first"
         game.period_started_at = None
         _record_off_for_on_field(game_id, game.game_seconds_at_period_start)
@@ -217,7 +299,8 @@ def start_second_half(game_id):
     current_secs = game.game_seconds_at_period_start
 
     for gp in GamePlayer.query.filter_by(game_id=game_id, on_field=True):
-        ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on", game_seconds=current_secs)
+        ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on",
+                          game_seconds=current_secs, is_gk=(gp.slot_line == 0))
         db.session.add(ev)
 
     db.session.commit()
@@ -235,10 +318,10 @@ def pause_game(game_id):
         new_secs = game.game_seconds_at_period_start + elapsed
         # cap at half boundaries
         if game.status == "first_half":
-            new_secs = min(new_secs, 25 * 60)
+            new_secs = min(new_secs, game.half_length_seconds)
             game.status = "paused_first"
         else:
-            new_secs = min(new_secs, 50 * 60)
+            new_secs = min(new_secs, game.half_length_seconds * 2)
             game.status = "paused_second"
         game.game_seconds_at_period_start = new_secs
         game.period_started_at = None
@@ -251,7 +334,8 @@ def pause_game(game_id):
         game.status = half
         game.period_started_at = now
         for gp in GamePlayer.query.filter_by(game_id=game_id, on_field=True):
-            ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on", game_seconds=current_secs)
+            ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on",
+                              game_seconds=current_secs, is_gk=(gp.slot_line == 0))
             db.session.add(ev)
 
     else:
@@ -259,34 +343,6 @@ def pause_game(game_id):
 
     db.session.commit()
     return jsonify(game.to_dict())
-
-
-@api_bp.route("/games/<int:game_id>/substitute", methods=["POST"])
-@api_login_required
-def substitute(game_id):
-    """Toggle a player on/off during the game."""
-    game = Game.query.get_or_404(game_id)
-    running = game.status in ("first_half", "second_half")
-    paused = game.status in ("paused_first", "paused_second")
-
-    if not (running or paused):
-        return jsonify({"error": "Spiel läuft nicht"}), 400
-
-    data = request.get_json()
-    gp = GamePlayer.query.filter_by(game_id=game_id, player_id=data["player_id"]).first_or_404()
-    game_secs = game.current_game_seconds()
-
-    if gp.on_field:
-        gp.on_field = False
-        ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="off", game_seconds=game_secs)
-        db.session.add(ev)
-    else:
-        gp.on_field = True
-        ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="on", game_seconds=game_secs)
-        db.session.add(ev)
-
-    db.session.commit()
-    return jsonify(gp.to_dict())
 
 
 @api_bp.route("/games/<int:game_id>/finish", methods=["POST"])
@@ -297,7 +353,7 @@ def finish_game(game_id):
 
     if game.status in ("second_half",):
         elapsed = now - game.period_started_at
-        new_secs = min(game.game_seconds_at_period_start + elapsed, 50 * 60)
+        new_secs = min(game.game_seconds_at_period_start + elapsed, game.half_length_seconds * 2)
         game.game_seconds_at_period_start = new_secs
         _record_off_for_on_field(game_id, new_secs)
     elif game.status == "paused_second":
@@ -311,5 +367,6 @@ def finish_game(game_id):
 
 def _record_off_for_on_field(game_id, game_seconds):
     for gp in GamePlayer.query.filter_by(game_id=game_id, on_field=True):
-        ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="off", game_seconds=game_seconds)
+        ev = PlayerEvent(game_id=game_id, player_id=gp.player_id, event_type="off",
+                          game_seconds=game_seconds, is_gk=(gp.slot_line == 0))
         db.session.add(ev)

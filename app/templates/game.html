@@ -29,7 +29,7 @@
     <!-- Progress bar for overall game time -->
     <div class="h-2 bg-gray-100 rounded-full overflow-hidden mt-3">
       <div class="h-full bg-green-500 rounded-full progress-bar"
-           :style="`width: ${Math.min(displaySeconds / (50*60) * 100, 100)}%`"></div>
+           :style="`width: ${Math.min(displaySeconds / gameLength * 100, 100)}%`"></div>
     </div>
     <div class="text-xs text-gray-400 mt-1">Spielzeit gesamt</div>
   </div>
@@ -100,20 +100,56 @@
 
   <!-- Squad size hint (setup only) -->
   <template x-if="game?.status === 'setup'">
-    <div class="text-center text-sm mb-4"
-         :class="onFieldCount === game.field_players ? 'text-green-700 font-semibold' : 'text-gray-400'">
-      <span x-text="onFieldCount"></span>/<span x-text="game.field_players"></span> Spieler ausgewählt
-      <span x-show="onFieldCount !== game.field_players" class="text-orange-500">
-        – bitte genau <span x-text="game.field_players"></span> wählen
+    <div class="text-center text-sm mb-3"
+         :class="assignedCount === requiredCount ? 'text-green-700 font-semibold' : 'text-gray-400'">
+      <span x-text="assignedCount"></span>/<span x-text="requiredCount"></span> Positionen besetzt
+      <span x-show="assignedCount !== requiredCount" class="text-orange-500">
+        – bitte alle Positionen (inkl. Torhüter) besetzen
       </span>
     </div>
   </template>
 
-  <!-- Player list -->
+  <!-- Pitch -->
+  <div class="pitch-bg rounded-2xl shadow-sm p-4 mb-4">
+    <template x-for="(row, ri) in pitchRows" :key="ri">
+      <div class="flex justify-center gap-2 mb-3 last:mb-0">
+        <template x-for="slot in row" :key="`${slot.line}-${slot.index}`">
+          <div @click="openPicker(slot.line, slot.index)"
+               class="btn-tap w-16 h-16 rounded-xl flex flex-col items-center justify-center text-center cursor-pointer select-none shadow transition-colors"
+               :class="slotClass(slot)">
+            <template x-if="slot.player">
+              <div class="px-1 overflow-hidden w-full">
+                <div class="text-[11px] font-bold leading-tight truncate" x-text="slot.player.name"></div>
+                <div class="text-[10px] opacity-80"
+                     x-text="formatTime(slot.line === 0 ? slot.player.gk_seconds : slot.player.played_seconds)"></div>
+              </div>
+            </template>
+            <template x-if="!slot.player">
+              <div class="text-white/70 text-2xl leading-none">+</div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </template>
+  </div>
+
+  <!-- Bench -->
+  <div class="mb-4">
+    <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Bank</div>
+    <div class="flex flex-wrap gap-2">
+      <template x-for="p in benchPlayers" :key="p.player_id">
+        <div class="px-3 py-2 rounded-lg bg-white border border-gray-100 shadow-sm text-sm">
+          <span class="font-medium" x-text="p.name"></span>
+        </div>
+      </template>
+      <div x-show="benchPlayers.length === 0" class="text-gray-400 text-sm">Bank ist leer.</div>
+    </div>
+  </div>
+
+  <!-- Progress list -->
   <ul class="space-y-2">
-    <template x-for="p in players" :key="p.player_id">
-      <li @click="handlePlayerTap(p)"
-          class="btn-tap flex items-center gap-3 rounded-xl px-4 py-3 shadow-sm border cursor-pointer select-none transition-all"
+    <template x-for="p in sortedPlayers" :key="p.player_id">
+      <li class="flex items-center gap-3 rounded-xl px-4 py-3 shadow-sm border transition-all"
           :class="playerCardClass(p)">
 
         <!-- Status dot -->
@@ -122,8 +158,14 @@
 
         <!-- Name -->
         <div class="flex-1 min-w-0">
-          <div class="font-semibold truncate" x-text="p.name"></div>
-          <div class="text-xs text-gray-400" x-text="formatTime(p.played_seconds)"></div>
+          <div class="font-semibold truncate">
+            <span x-text="p.name"></span>
+            <span x-show="p.slot_line === 0" class="text-xs font-normal text-yellow-600 ml-1">TW</span>
+          </div>
+          <div class="text-xs text-gray-400">
+            <span x-text="formatTime(p.played_seconds)"></span>
+            <span x-show="p.gk_seconds > 0"> · TW: <span x-text="formatTime(p.gk_seconds)"></span></span>
+          </div>
         </div>
 
         <!-- Progress bar -->
@@ -142,7 +184,47 @@
     </template>
   </ul>
 
+  <!-- Slot picker -->
+  <div x-show="pickerOpen" x-transition
+       class="fixed inset-0 bg-black/50 z-40 flex items-end sm:items-center justify-center"
+       @click.self="closePicker()">
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-sm max-h-[70vh] overflow-y-auto p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold" x-text="pickerLine === 0 ? 'Torhüter wählen' : 'Spieler wählen'"></h3>
+        <button @click="closePicker()" class="text-gray-400 text-xl leading-none px-2">&times;</button>
+      </div>
+      <ul class="space-y-2">
+        <template x-for="p in benchPlayers" :key="p.player_id">
+          <li @click="pickPlayer(p.player_id)"
+              class="btn-tap flex items-center justify-between rounded-lg px-3 py-2 bg-gray-50 hover:bg-green-50 cursor-pointer">
+            <span class="font-medium" x-text="p.name"></span>
+            <span class="text-xs text-gray-400" x-text="formatTime(p.played_seconds)"></span>
+          </li>
+        </template>
+        <li x-show="benchPlayers.length === 0" class="text-gray-400 text-sm text-center py-4">
+          Keine Spieler auf der Bank.
+        </li>
+      </ul>
+      <button x-show="game?.status === 'setup' && currentSlotPlayer"
+              @click="removeFromSlot()"
+              class="btn-tap w-full mt-3 text-red-500 text-sm font-medium py-2 rounded-lg hover:bg-red-50">
+        Spieler von Position entfernen
+      </button>
+    </div>
+  </div>
+
 </div>
+
+<style>
+  .pitch-bg {
+    background: repeating-linear-gradient(
+      to bottom,
+      #16a34a 0, #16a34a 40px,
+      #15803d 40px, #15803d 80px
+    );
+    border: 2px solid rgba(255,255,255,0.4);
+  }
+</style>
 {% endblock %}
 
 {% block scripts %}
@@ -153,6 +235,9 @@ function gameApp(gameId) {
     players: [],
     fairShare: 0,
     displaySeconds: 0,
+    pickerOpen: false,
+    pickerLine: null,
+    pickerIndex: null,
     _tickInterval: null,
     _pollInterval: null,
     _localStart: null,       // performance.now() when current period started (client-side)
@@ -161,8 +246,43 @@ function gameApp(gameId) {
     get isRunning() {
       return this.game?.status === 'first_half' || this.game?.status === 'second_half';
     },
-    get onFieldCount() {
-      return this.players.filter(p => p.on_field).length;
+    get gameLength() {
+      return (this.game?.half_length_seconds || 1500) * 2;
+    },
+    get assignedCount() {
+      return this.players.filter(p => p.slot_line !== null).length;
+    },
+    get requiredCount() {
+      return (this.game?.field_players || 0) + 1;
+    },
+    get benchPlayers() {
+      return this.players.filter(p => p.slot_line === null).sort((a, b) => a.name.localeCompare(b.name));
+    },
+    get sortedPlayers() {
+      return [...this.players].sort((a, b) => a.name.localeCompare(b.name));
+    },
+    get pitchRows() {
+      if (!this.game) return [];
+      const lines = this.game.formation_lines || [];
+      const rows = [];
+      for (let i = lines.length; i >= 1; i--) {
+        const count = lines[i - 1];
+        const slots = [];
+        for (let idx = 0; idx < count; idx++) {
+          slots.push({ line: i, index: idx, player: this._findSlot(i, idx) });
+        }
+        rows.push(slots);
+      }
+      rows.push([{ line: 0, index: 0, player: this._findSlot(0, 0) }]);
+      return rows;
+    },
+    get currentSlotPlayer() {
+      if (this.pickerLine === null) return null;
+      return this._findSlot(this.pickerLine, this.pickerIndex);
+    },
+
+    _findSlot(line, index) {
+      return this.players.find(p => p.slot_line === line && p.slot_index === index) || null;
     },
 
     async init() {
@@ -196,7 +316,6 @@ function gameApp(gameId) {
       } else {
         this._stopTick();
         this.displaySeconds = data.game.game_seconds;
-        this._updatePlayerDisplayTimes();
       }
     },
 
@@ -207,7 +326,8 @@ function gameApp(gameId) {
         const secs = this._secsAtPeriodStart + elapsed;
 
         // Auto-stop at half boundaries
-        const halfEnd = this.game?.status === 'first_half' ? 25*60 : 50*60;
+        const halfLength = this.game?.half_length_seconds || 1500;
+        const halfEnd = this.game?.status === 'first_half' ? halfLength : halfLength * 2;
         if (secs >= halfEnd) {
           this.displaySeconds = halfEnd;
           this._stopTick();
@@ -219,7 +339,6 @@ function gameApp(gameId) {
           return;
         }
         this.displaySeconds = secs;
-        this._updatePlayerDisplayTimes();
       }, 500);
     },
 
@@ -228,20 +347,6 @@ function gameApp(gameId) {
         clearInterval(this._tickInterval);
         this._tickInterval = null;
       }
-    },
-
-    _updatePlayerDisplayTimes() {
-      if (!this.isRunning) return;
-      const currentSecs = this.displaySeconds;
-      // Find players currently on field and update their live time
-      // We reconstruct from the last server snapshot + elapsed
-      this.players = this.players.map(p => {
-        if (p.on_field && this.isRunning) {
-          // server gave us played_seconds at poll time; add live delta
-          return { ...p, _live: true };
-        }
-        return p;
-      });
     },
 
     async _autoEndFirstHalf() {
@@ -258,41 +363,41 @@ function gameApp(gameId) {
       } catch(e) {}
     },
 
-    // ── Player tap ──────────────────────────────────────────────────────
+    // ── Slot picker / substitution ──────────────────────────────────────
 
-    async handlePlayerTap(p) {
-      if (this.game?.status === 'setup') {
-        await this.toggleSetup(p);
-      } else if (this.game?.status !== 'finished') {
-        await this.substitute(p);
-      }
+    openPicker(line, index) {
+      if (!this.game || this.game.status === 'finished') return;
+      this.pickerLine = line;
+      this.pickerIndex = index;
+      this.pickerOpen = true;
     },
-
-    async toggleSetup(p) {
-      const r = await fetch(`/api/games/${gameId}/toggle-player`, {
+    closePicker() {
+      this.pickerOpen = false;
+    },
+    async pickPlayer(playerId) {
+      const r = await fetch(`/api/games/${gameId}/assign-slot`, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({player_id: p.player_id})
+        body: JSON.stringify({ slot_line: this.pickerLine, slot_index: this.pickerIndex, player_id: playerId })
       });
       if (r.ok) {
-        const updated = await r.json();
-        this.players = this.players.map(pl =>
-          pl.player_id === p.player_id ? {...pl, on_field: updated.on_field} : pl
-        );
+        this.pickerOpen = false;
+        await this.fetchState();
+      } else {
+        const err = await r.json().catch(() => ({}));
+        alert(err.error || 'Fehler beim Zuweisen.');
       }
     },
-
-    async substitute(p) {
-      const r = await fetch(`/api/games/${gameId}/substitute`, {
+    async removeFromSlot() {
+      const occupant = this.currentSlotPlayer;
+      if (!occupant) return;
+      const r = await fetch(`/api/games/${gameId}/unassign-slot`, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({player_id: p.player_id})
+        body: JSON.stringify({ player_id: occupant.player_id })
       });
       if (r.ok) {
-        // Optimistic update then refetch
-        this.players = this.players.map(pl =>
-          pl.player_id === p.player_id ? {...pl, on_field: !pl.on_field} : pl
-        );
+        this.pickerOpen = false;
         await this.fetchState();
       }
     },
@@ -300,8 +405,8 @@ function gameApp(gameId) {
     // ── Game control ────────────────────────────────────────────────────
 
     async startFirstHalf() {
-      if (this.onFieldCount !== this.game?.field_players) {
-        alert(`Bitte genau ${this.game?.field_players} Spieler auswählen.`);
+      if (this.assignedCount !== this.requiredCount) {
+        alert(`Bitte alle ${this.requiredCount} Positionen (inkl. Torhüter) besetzen.`);
         return;
       }
       const r = await fetch(`/api/games/${gameId}/start`, {method:'POST'});
@@ -367,9 +472,17 @@ function gameApp(gameId) {
       return 'bg-orange-400';
     },
     playerCardClass(p) {
-      if (this.game?.status === 'finished') return 'bg-white border-gray-100 cursor-default';
+      if (this.game?.status === 'finished') return 'bg-white border-gray-100';
       if (p.on_field) return 'bg-green-50 border-green-200';
       return 'bg-white border-gray-100';
+    },
+    slotClass(slot) {
+      if (this.game?.status === 'finished') {
+        return slot.player ? 'bg-white/90 border-2 border-white/40 text-gray-700' : 'bg-white/10 border-2 border-dashed border-white/30';
+      }
+      if (!slot.player) return 'bg-white/15 border-2 border-dashed border-white/60 hover:bg-white/25 text-white';
+      if (slot.line === 0) return 'bg-yellow-400 border-2 border-yellow-100 text-yellow-950 hover:bg-yellow-300';
+      return 'bg-white border-2 border-white text-gray-800 hover:bg-green-50';
     },
   }
 }
