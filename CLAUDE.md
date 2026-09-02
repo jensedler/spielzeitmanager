@@ -28,7 +28,9 @@ git tag v1.0.0
 git push --tags
 ```
 
-GitHub Actions baut das Docker-Image und pusht nach `ghcr.io/jensedler/spielzeitmanager`.
+GitHub Actions baut das Docker-Image und pusht nach `ghcr.io/jensedler/spielzeitmanager`. Von dort läuft eine **produktive Instanz über Once** (Self-Hosting-Plattform) mit echten Daten.
+
+**Wichtig für jedes Update mit Schema-Änderung**: Neue Migrationen in `migrate.py` müssen vor dem Taggen/Deployen getestet werden (z.B. lokal gegen eine Kopie der Produktions-DB oder mit realistischen Altdaten), damit beim Rollout keine Daten auf der produktiven Instanz verloren gehen.
 
 ## Spiellogik
 
