@@ -18,6 +18,8 @@ class Game(db.Model):
     __tablename__ = "games"
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False)
+    # optional kick-off time as "HH:MM"; NULL for games created before this field existed
+    kickoff_time = db.Column(db.String(5), nullable=True)
     opponent = db.Column(db.String(100), nullable=False)
     # setup | running | paused | finished
     status = db.Column(db.String(20), default="setup")
@@ -58,6 +60,7 @@ class Game(db.Model):
         return {
             "id": self.id,
             "date": self.date.isoformat(),
+            "kickoff_time": self.kickoff_time,
             "opponent": self.opponent,
             "status": self.status,
             "field_players": self.field_players,
@@ -81,6 +84,9 @@ class GamePlayer(db.Model):
     player_id = db.Column(db.Integer, db.ForeignKey("players.id"), nullable=False)
     # True = currently on the field, False = on bench
     on_field = db.Column(db.Boolean, default=False)
+    # True = designated goalkeeper for this game; excluded from the fair-share
+    # denominator whether on the pitch or on the bench
+    is_goalkeeper = db.Column(db.Boolean, default=False)
     # 0 = goalkeeper, 1..N = formation line (1 = defense, ascending toward attack), NULL = bench
     slot_line = db.Column(db.Integer, nullable=True)
     # position within the line, 0-based
@@ -94,6 +100,7 @@ class GamePlayer(db.Model):
             "player_id": self.player_id,
             "name": self.player.name,
             "on_field": self.on_field,
+            "is_goalkeeper": self.is_goalkeeper,
             "slot_line": self.slot_line,
             "slot_index": self.slot_index,
         }

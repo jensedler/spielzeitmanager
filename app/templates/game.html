@@ -8,7 +8,7 @@
     <a href="/games" class="text-green-700 text-lg">‹</a>
     <div>
       <h2 class="text-xl font-bold" x-text="game ? game.opponent : '…'"></h2>
-      <div class="text-sm text-gray-500" x-text="game ? formatDate(game.date) : ''"></div>
+      <div class="text-sm text-gray-500" x-text="game ? formatDateTime(game) : ''"></div>
     </div>
     <div class="ml-auto">
       <span class="text-xs px-2 py-1 rounded-full font-medium"
@@ -139,12 +139,18 @@
     </div>
     <div class="flex flex-wrap gap-2">
       <template x-for="p in benchPlayers" :key="p.player_id">
-        <div class="px-3 py-2 rounded-lg bg-white border border-gray-100 shadow-sm text-sm">
+        <div class="px-3 py-2 rounded-lg bg-white border border-gray-100 shadow-sm text-sm flex items-center gap-2">
           <span class="font-medium" x-text="p.name"></span>
+          <button x-show="game?.status !== 'finished'" @click="toggleGk(p)"
+                  class="btn-tap text-[10px] px-1.5 py-0.5 rounded border font-semibold"
+                  :class="p.is_goalkeeper ? 'bg-yellow-400 border-yellow-500 text-yellow-950' : 'border-gray-300 text-gray-400'">
+            TW
+          </button>
         </div>
       </template>
       <div x-show="benchPlayers.length === 0" class="text-gray-400 text-sm">Bank ist leer.</div>
     </div>
+    <div class="text-xs text-gray-400 mt-1">„TW" = als Torhüter markiert – zählt nicht ins Fair Share.</div>
   </div>
 
   <!-- Progress list -->
@@ -161,7 +167,7 @@
         <div class="flex-1 min-w-0">
           <div class="font-semibold truncate">
             <span x-text="p.name"></span>
-            <span x-show="p.slot_line === 0" class="text-xs font-normal text-yellow-600 ml-1">TW</span>
+            <span x-show="p.slot_line === 0 || p.is_goalkeeper" class="text-xs font-normal text-yellow-600 ml-1">TW</span>
           </div>
           <div class="text-xs text-gray-400">
             <span x-text="formatTime(p.played_seconds)"></span>
@@ -169,8 +175,8 @@
           </div>
         </div>
 
-        <!-- Progress bar -->
-        <div class="w-28 flex-shrink-0">
+        <!-- Progress bar (outfield players only) -->
+        <div class="w-28 flex-shrink-0" x-show="!p.is_goalkeeper">
           <div class="h-3 bg-gray-100 rounded-full overflow-hidden">
             <div class="h-full rounded-full transition-all duration-1000"
                  :class="progressColor(p)"
@@ -179,6 +185,9 @@
           <div class="text-xs text-right mt-0.5"
                :class="progressColor(p).replace('bg-', 'text-')"
                x-text="`${Math.round(progressPct(p))}%`"></div>
+        </div>
+        <div class="w-28 flex-shrink-0 text-right text-xs text-yellow-600 font-medium" x-show="p.is_goalkeeper">
+          Torhüter
         </div>
 
       </li>
@@ -228,7 +237,13 @@
           <li class="flex items-center gap-2 rounded-lg px-3 py-2 bg-gray-50">
             <input type="checkbox" :value="p.id" x-model.number="rosterSelection"
                    class="rounded text-green-600 focus:ring-green-500">
-            <span class="font-medium" x-text="p.name"></span>
+            <span class="font-medium flex-1 truncate" x-text="p.name"></span>
+            <button type="button" x-show="rosterSelection.includes(p.id)"
+                    @click="toggleRosterGk(p.id)"
+                    class="btn-tap text-[10px] px-1.5 py-0.5 rounded border font-semibold"
+                    :class="rosterGkSelection.includes(p.id) ? 'bg-yellow-400 border-yellow-500 text-yellow-950' : 'border-gray-300 text-gray-400'">
+              TW
+            </button>
           </li>
         </template>
         <li x-show="availablePlayers.length === 0" class="text-gray-400 text-sm text-center py-4">
@@ -272,6 +287,7 @@ function gameApp(gameId) {
     pickerIndex: null,
     rosterOpen: false,
     rosterSelection: [],
+    rosterGkSelection: [],
     _tickInterval: null,
     _pollInterval: null,
     _localStart: null,       // performance.now() when current period started (client-side)
@@ -464,17 +480,26 @@ function gameApp(gameId) {
     async openRosterPicker() {
       await this.fetchAllPlayers();
       this.rosterSelection = [];
+      this.rosterGkSelection = [];
       this.rosterOpen = true;
     },
     closeRosterPicker() {
       this.rosterOpen = false;
+    },
+    toggleRosterGk(pid) {
+      const i = this.rosterGkSelection.indexOf(pid);
+      if (i === -1) this.rosterGkSelection.push(pid);
+      else this.rosterGkSelection.splice(i, 1);
     },
     async submitRoster() {
       if (this.rosterSelection.length === 0) return;
       const r = await fetch(`/api/games/${gameId}/roster`, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ player_ids: this.rosterSelection })
+        body: JSON.stringify({
+          player_ids: this.rosterSelection,
+          goalkeeper_ids: this.rosterGkSelection.filter(id => this.rosterSelection.includes(id)),
+        })
       });
       if (r.ok) {
         this.rosterOpen = false;
@@ -482,6 +507,18 @@ function gameApp(gameId) {
       } else {
         const err = await r.json().catch(() => ({}));
         alert(err.error || 'Fehler beim Hinzufügen.');
+      }
+    },
+    async toggleGk(p) {
+      const r = await fetch(`/api/games/${gameId}/set-goalkeeper`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ player_id: p.player_id, is_goalkeeper: !p.is_goalkeeper })
+      });
+      if (r.ok) await this.fetchState();
+      else {
+        const err = await r.json().catch(() => ({}));
+        alert(err.error || 'Fehler beim Ändern der Torhüter-Markierung.');
       }
     },
 
@@ -533,6 +570,11 @@ function gameApp(gameId) {
     formatDate(iso) {
       if (!iso) return '';
       return new Date(iso).toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit', year:'numeric'});
+    },
+    formatDateTime(g) {
+      if (!g) return '';
+      const d = this.formatDate(g.date);
+      return g.kickoff_time ? `${d} · ${g.kickoff_time} Uhr` : d;
     },
     halfLabel(status) {
       status = status || this.game?.status;

@@ -6,6 +6,20 @@ from ..formation import parse_formation, FormationError
 api_bp = Blueprint("api", __name__)
 
 
+def _parse_kickoff(value):
+    """Normalise a kick-off time. Returns (value, error):
+    ("HH:MM", None) on success, (None, None) when empty/omitted,
+    (None, "…") when the input is not a valid HH:MM time."""
+    if value is None or str(value).strip() == "":
+        return None, None
+    from datetime import datetime as _dt
+    try:
+        t = _dt.strptime(str(value).strip(), "%H:%M")
+    except ValueError:
+        return None, "Ungültige Anstoßzeit (Format HH:MM)"
+    return t.strftime("%H:%M"), None
+
+
 def api_login_required(f):
     from functools import wraps
     @wraps(f)
@@ -52,7 +66,12 @@ def delete_player(player_id):
 @api_bp.route("/games", methods=["GET"])
 @api_login_required
 def list_games():
-    games = Game.query.order_by(Game.date.desc(), Game.id.desc()).all()
+    games = Game.query.order_by(
+        Game.date.desc(),
+        Game.kickoff_time.is_(None),   # games with a kick-off time first within a day
+        Game.kickoff_time.asc(),       # then chronological by kick-off
+        Game.id.asc(),
+    ).all()
     return jsonify([g.to_dict() for g in games])
 
 
@@ -68,6 +87,10 @@ def create_game():
     opponent = (data.get("opponent") or "").strip()
     if not opponent:
         return jsonify({"error": "Gegner erforderlich"}), 400
+
+    kickoff_time, kickoff_err = _parse_kickoff(data.get("kickoff_time"))
+    if kickoff_err:
+        return jsonify({"error": kickoff_err}), 400
 
     try:
         lines, formation = parse_formation(data.get("formation", ""))
@@ -92,6 +115,7 @@ def create_game():
 
     game = Game(
         date=game_date,
+        kickoff_time=kickoff_time,
         opponent=opponent,
         field_players=field_players,
         formation=formation,
@@ -103,12 +127,84 @@ def create_game():
     db.session.flush()
 
     player_ids = data.get("player_ids", [])
+    goalkeeper_ids = set(data.get("goalkeeper_ids", []))
     for pid in player_ids:
-        gp = GamePlayer(game_id=game.id, player_id=pid, on_field=False)
+        gp = GamePlayer(game_id=game.id, player_id=pid, on_field=False,
+                        is_goalkeeper=pid in goalkeeper_ids)
         db.session.add(gp)
 
     db.session.commit()
     return jsonify(game.to_dict()), 201
+
+
+@api_bp.route("/games/<int:game_id>", methods=["PATCH"])
+@api_login_required
+def update_game(game_id):
+    """Edit an existing game. Date, opponent and kick-off time can always be
+    changed; formation, half length and number of halves only while the game
+    is still in `setup` (changing them later would break slot assignments and
+    the timer maths). Changing the formation clears all slot assignments."""
+    game = Game.query.get_or_404(game_id)
+    data = request.get_json() or {}
+
+    if "opponent" in data:
+        opponent = (data.get("opponent") or "").strip()
+        if not opponent:
+            return jsonify({"error": "Gegner erforderlich"}), 400
+        game.opponent = opponent
+
+    if "date" in data:
+        from datetime import date
+        try:
+            game.date = date.fromisoformat(data["date"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "Ungültiges Datum"}), 400
+
+    if "kickoff_time" in data:
+        kickoff_time, kickoff_err = _parse_kickoff(data.get("kickoff_time"))
+        if kickoff_err:
+            return jsonify({"error": kickoff_err}), 400
+        game.kickoff_time = kickoff_time
+
+    setup_only_fields = ("formation", "half_length_minutes", "num_halves")
+    if any(f in data for f in setup_only_fields) and game.status != "setup":
+        return jsonify({"error": "Formation, Halbzeitlänge und Anzahl Halbzeiten "
+                                 "können nur vor dem Anpfiff geändert werden"}), 400
+
+    if "half_length_minutes" in data:
+        try:
+            half_length_minutes = float(data["half_length_minutes"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "Ungültige Halbzeitlänge"}), 400
+        if half_length_minutes <= 0:
+            return jsonify({"error": "Halbzeitlänge muss größer als 0 sein"}), 400
+        game.half_length_seconds = int(half_length_minutes * 60)
+
+    if "num_halves" in data:
+        try:
+            num_halves = int(data["num_halves"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "Ungültige Anzahl Halbzeiten"}), 400
+        if num_halves < 1 or num_halves > 20:
+            return jsonify({"error": "Anzahl Halbzeiten muss zwischen 1 und 20 liegen"}), 400
+        game.num_halves = num_halves
+
+    if "formation" in data:
+        try:
+            lines, formation = parse_formation(data.get("formation", ""))
+        except FormationError as e:
+            return jsonify({"error": str(e)}), 400
+        if formation != game.formation:
+            game.formation = formation
+            game.field_players = sum(lines)
+            # slot indices may no longer be valid – send everyone back to the bench
+            for gp in GamePlayer.query.filter_by(game_id=game_id):
+                gp.slot_line = None
+                gp.slot_index = None
+                gp.on_field = False
+
+    db.session.commit()
+    return jsonify(game.to_dict())
 
 
 @api_bp.route("/games/<int:game_id>", methods=["DELETE"])
@@ -132,18 +228,39 @@ def add_to_roster(game_id):
 
     data = request.get_json()
     player_ids = data.get("player_ids", [])
+    goalkeeper_ids = set(data.get("goalkeeper_ids", []))
     existing = {gp.player_id for gp in GamePlayer.query.filter_by(game_id=game_id).all()}
 
     added = 0
     for pid in player_ids:
         if pid in existing or not Player.query.get(pid):
             continue
-        db.session.add(GamePlayer(game_id=game_id, player_id=pid, on_field=False))
+        db.session.add(GamePlayer(game_id=game_id, player_id=pid, on_field=False,
+                                  is_goalkeeper=pid in goalkeeper_ids))
         existing.add(pid)
         added += 1
 
     db.session.commit()
     return jsonify({"ok": True, "added": added})
+
+
+@api_bp.route("/games/<int:game_id>/set-goalkeeper", methods=["POST"])
+@api_login_required
+def set_goalkeeper(game_id):
+    """Mark or unmark a squad player as this game's designated goalkeeper.
+    Designated goalkeepers are left out of the fair-share denominator, so a
+    keeper waiting on the bench no longer dilutes everyone else's target."""
+    game = Game.query.get_or_404(game_id)
+    if game.status == "finished":
+        return jsonify({"error": "Spiel ist bereits beendet"}), 400
+
+    data = request.get_json() or {}
+    gp = GamePlayer.query.filter_by(
+        game_id=game_id, player_id=data.get("player_id")
+    ).first_or_404()
+    gp.is_goalkeeper = bool(data.get("is_goalkeeper"))
+    db.session.commit()
+    return jsonify({"ok": True, "player_id": gp.player_id, "is_goalkeeper": gp.is_goalkeeper})
 
 
 @api_bp.route("/games/<int:game_id>/state", methods=["GET"])
@@ -155,9 +272,11 @@ def game_state(game_id):
 
     player_times, gk_times = _compute_player_times(game_id, game_secs)
     squad_size = len(roster)
+    # designated goalkeepers are excluded from the fair-share denominator
+    outfield_squad_size = sum(1 for gp in roster if not gp.is_goalkeeper)
     fp = game.field_players
     game_length = game.game_length_seconds
-    fair_share = (game_length * fp) / squad_size if squad_size > 0 else 0
+    fair_share = (game_length * fp) / outfield_squad_size if outfield_squad_size > 0 else 0
 
     players_data = []
     for gp in sorted(roster, key=lambda x: x.player.name):
@@ -167,13 +286,14 @@ def game_state(game_id):
             **gp.to_dict(),
             "played_seconds": pt,
             "gk_seconds": gt,
-            "fair_share_seconds": fair_share,
+            "fair_share_seconds": 0 if gp.is_goalkeeper else fair_share,
         })
 
     return jsonify({
         "game": game.to_dict(),
         "players": players_data,
         "squad_size": squad_size,
+        "outfield_squad_size": outfield_squad_size,
         "fair_share_seconds": fair_share,
     })
 

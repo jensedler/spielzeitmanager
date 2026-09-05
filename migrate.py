@@ -87,6 +87,15 @@ MIGRATIONS = [
         UPDATE games SET status = 'paused' WHERE status IN ('paused_first', 'paused_second');
         """,
     ),
+    (
+        6,
+        "Add kickoff time to games and a per-game goalkeeper flag",
+        """
+        ALTER TABLE games ADD COLUMN kickoff_time TEXT;
+        ALTER TABLE game_players ADD COLUMN is_goalkeeper INTEGER DEFAULT 0;
+        UPDATE game_players SET is_goalkeeper = 0 WHERE is_goalkeeper IS NULL;
+        """,
+    ),
 ]
 
 
